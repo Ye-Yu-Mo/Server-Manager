@@ -1,0 +1,43 @@
+# Server Manager Node 配置
+
+[core]
+# Core服务地址
+url = "ws://localhost:9999/api/v1/ws"
+# 认证令牌
+token = "default-token"
+# 节点ID (可选，不设置时自动生成)
+node_id = "test"
+
+[monitoring]
+# 心跳间隔(秒)
+heartbeat_interval = 30
+# 监控数据采集间隔(秒)
+metrics_interval = 10
+# 是否启用详细监控
+detailed_metrics = false
+
+[system]
+# 主机名 (可选，不设置时自动获取)
+hostname = "1111"
+# 是否上报系统信息
+report_system_info = true
+
+[logging]
+# 日志级别: trace, debug, info, warn, error
+level = "info"
+# 是否输出到文件
+file_enabled = false
+# 日志文件路径
+file_path = "logs/node.log"
+# 是否输出到控制台
+console_enabled = true
+
+[advanced]
+# 连接重试间隔(秒)
+reconnect_interval = 5
+# 最大重试次数
+max_retries = 10
+# 命令执行超时时间(秒)
+command_timeout = 30
+# 监控数据保留天数
+metrics_retention_days = 7

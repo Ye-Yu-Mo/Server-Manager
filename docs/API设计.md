@@ -172,15 +172,17 @@ http://localhost:9999/api/v1
 
 ### 认证头
 ```
-Authorization: Bearer {TOKEN}
+Authorization: Bearer default-token
 ```
+
+*注意：MVP版本使用固定token `default-token`*
 
 ### 通用响应格式
 ```json
 {
   "success": true,
-  "message": "操作成功",
-  "data": { /* 具体数据 */ },
+  "message": "操作成功描述",
+  "data": { /* 具体数据内容 */ },
   "timestamp": "2025-01-21T10:00:00Z"
 }
 ```

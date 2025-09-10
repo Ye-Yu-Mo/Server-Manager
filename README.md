@@ -4,11 +4,39 @@
 
 ---
 
-## 使用流程
+## 📚 文档导航
 
-1. 启动core, 获取secret_key
-2. 配置node中的 secret_key
-3. 配置client中的 secret_key
+### 核心文档
+- **[API概述](docs/README_API.md)** - API接口快速索引
+- **[服务器架构说明](docs/README_SERVER.md)** - 详细架构设计
+- **[数据库设计](docs/数据库设计.md)** - 数据库表结构
+- **[开发计划](docs/开发计划.md)** - 项目开发进度
+
+### 开发指南
+- **[Flutter客户端开发指南](docs/Flutter客户端开发指南.md)** - 客户端开发完整指南
+- **[Node代理使用指南](docs/Node代理使用指南.md)** - Node代理安装配置
+
+## 🚀 快速开始
+
+### 1. 启动Core服务
+```bash
+cd server/core
+cargo run
+# 获取认证令牌
+```
+
+### 2. 配置Node代理
+```bash
+cd server/node
+# 配置config/default.toml中的token
+cargo run
+```
+
+### 3. 启动Flutter客户端
+```bash
+cd client
+flutter run
+```
 
 ## 系统架构
 
@@ -119,14 +147,12 @@ sequenceDiagram
 
 ---
 
-## 技术选型
+## 🎯 核心特性
 
-| 层级        | 技术选型                                   |
-| --------- | -------------------------------------- |
-| 节点代理      | Rust (tokio, async, sysinfo)           |
-| 核心服务 Core | Rust (axum/actix-web) + SQLite + Redis |
-| 通信协议      | WebSocket + HTTP/REST                  |
-| 数据存储      | SQLite（本地轻量数据库） + Redis（缓存/队列）         |
-| 客户端展示     | Flutter（跨平台：移动、桌面、Web）                 |
+- **轻量级部署** - 单二进制文件，无复杂依赖
+- **跨平台支持** - 支持多种操作系统和架构
+- **实时监控** - CPU、内存、磁盘等系统指标实时采集
+- **远程管理** - 安全的远程命令执行和结果查看
+- **多端客户端** - Flutter跨平台客户端，支持移动端、桌面端、Web
 
 ---

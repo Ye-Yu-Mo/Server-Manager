@@ -110,9 +110,9 @@ async fn handle_message(
     text: &str,
     socket: &mut WebSocket,
     state: &Arc<AppState>,
-    node_id: &str,
+    connection_node_id: &str,
 ) -> Result<(), anyhow::Error> {
-    info!("📨 收到消息 from {}: {}", node_id, text);
+    info!("📨 收到消息 from {}: {}", connection_node_id, text);
     
     let msg: WebSocketMessage = match serde_json::from_str(text) {
         Ok(msg) => msg,
@@ -133,10 +133,18 @@ async fn handle_message(
         }
     };
 
+    // 确定要使用的节点ID：优先使用消息中的node_id，如果没有则使用连接时的node_id
+    let node_id = if let Some(msg_node_id) = extract_node_id_from_message(&msg) {
+        msg_node_id
+    } else {
+        connection_node_id.to_string()
+    };
+
     match msg.message_type.as_str() {
-        "node_register" => handle_node_register(msg, socket, state, node_id).await,
-        "heartbeat" => handle_heartbeat(msg, socket, state, node_id).await,
-        "command_result" => handle_command_result(msg, socket, state, node_id).await,
+        "node_register" => handle_node_register(msg, socket, state, &node_id).await,
+        "heartbeat" => handle_heartbeat(msg, socket, state, &node_id).await,
+        "metrics" => handle_metrics(msg, socket, state, &node_id).await,
+        "command_result" => handle_command_result(msg, socket, state, &node_id).await,
         _ => {
             // 发送未知消息类型错误
             let error_msg = json!({
@@ -146,13 +154,30 @@ async fn handle_message(
                 "data": {
                     "error_code": "UNKNOWN_MESSAGE_TYPE",
                     "message": format!("未知的消息类型: {}", msg.message_type),
-                    "details": "支持的消息类型: node_register, heartbeat, command_result"
+                    "details": "支持的消息类型: node_register, heartbeat, metrics, command_result"
                 }
             });
             socket.send(Message::Text(error_msg.to_string().into())).await?;
             Ok(())
         }
     }
+}
+
+/// 从消息中提取节点ID
+fn extract_node_id_from_message(msg: &WebSocketMessage) -> Option<String> {
+    // 尝试从data字段中提取node_id
+    if let Some(node_id) = msg.data.get("node_id").and_then(|v| v.as_str()) {
+        return Some(node_id.to_string());
+    }
+    
+    // 如果消息类型是node_register，尝试从注册数据中提取
+    if msg.message_type == "node_register" {
+        if let Ok(register_data) = serde_json::from_value::<NodeRegisterData>(msg.data.clone()) {
+            return register_data.node_id;
+        }
+    }
+    
+    None
 }
 
 /// 节点注册数据结构
@@ -329,17 +354,107 @@ async fn send_error_response(
     Ok(())
 }
 
-/// 处理心跳消息
+/// 监控数据结构
+#[derive(Debug, Deserialize)]
+struct MetricData {
+    cpu_usage: Option<f64>,
+    memory_usage: Option<f64>,
+    disk_usage: Option<f64>,
+    load_average: Option<f64>,
+    // 可选的其他字段，用于未来扩展
+    memory_total: Option<f64>,
+    memory_available: Option<f64>,
+    disk_total: Option<f64>,
+    disk_available: Option<f64>,
+    network_rx: Option<f64>,
+    network_tx: Option<f64>,
+    uptime: Option<f64>,
+}
+
+/// 处理心跳消息（包含监控数据）
 async fn handle_heartbeat(
     msg: WebSocketMessage,
     socket: &mut WebSocket,
-    _state: &Arc<AppState>,
+    state: &Arc<AppState>,
     node_id: &str,
 ) -> Result<(), anyhow::Error> {
     info!("💓 心跳消息 from: {}", node_id);
     
-    // 这里应该保存监控数据到数据库
-    // 暂时简单响应心跳确认
+    // 解析监控数据
+    let metric_data: MetricData = match serde_json::from_value(msg.data.clone()) {
+        Ok(data) => data,
+        Err(e) => {
+            warn!("监控数据格式错误: {}", e);
+            // 即使数据格式错误，也继续处理心跳
+            MetricData {
+                cpu_usage: None,
+                memory_usage: None,
+                memory_total: None,
+                memory_available: None,
+                disk_usage: None,
+                disk_total: None,
+                disk_available: None,
+                network_rx: None,
+                network_tx: None,
+                load_average: None,
+                uptime: None,
+            }
+        }
+    };
+    
+    // 保存监控数据到数据库
+    let db = state.database.lock().await;
+    
+    // 首先检查节点是否存在，如果不存在则创建
+    let node_exists = match crate::models::Node::find_by_node_id(&db.pool, node_id).await {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(e) => {
+            error!("检查节点存在失败: {}", e);
+            false
+        }
+    };
+    
+    if !node_exists {
+        // 节点不存在，自动创建节点
+        let node_data = crate::models::NodeCreate {
+            node_id: node_id.to_string(),
+            hostname: "unknown".to_string(),
+            ip_address: "0.0.0.0".to_string(),
+            os_info: None,
+        };
+        
+        match crate::models::Node::create(&db.pool, node_data).await {
+            Ok(_) => {
+                info!("✅ 自动创建节点: {}", node_id);
+                // 添加到连接管理器
+                state.connection_manager.add_connection(node_id.to_string()).await;
+            }
+            Err(e) => {
+                error!("❌ 自动创建节点失败: {}", e);
+            }
+        }
+    }
+    
+    let metric_create = crate::models::MetricCreate {
+        node_id: node_id.to_string(),
+        cpu_usage: metric_data.cpu_usage,
+        memory_usage: metric_data.memory_usage,
+        disk_usage: metric_data.disk_usage,
+        load_average: metric_data.load_average,
+    };
+    
+    match crate::models::NodeMetric::create(&db.pool, metric_create).await {
+        Ok(_) => {
+            debug!("✅ 监控数据保存成功: {}", node_id);
+        }
+        Err(e) => {
+            error!("❌ 保存监控数据失败: {}", e);
+        }
+    }
+    
+    // 更新节点活动时间
+    state.connection_manager.update_activity(node_id).await;
     
     let response = json!({
         "type": "heartbeat_ack",
@@ -347,11 +462,111 @@ async fn handle_heartbeat(
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "data": {
             "received": true,
-            "node_id": node_id
+            "node_id": node_id,
+            "metrics_saved": true
         }
     });
     
     socket.send(Message::Text(response.to_string().into())).await?;
+    Ok(())
+}
+
+/// 处理专门的监控数据消息
+async fn handle_metrics(
+    msg: WebSocketMessage,
+    socket: &mut WebSocket,
+    state: &Arc<AppState>,
+    node_id: &str,
+) -> Result<(), anyhow::Error> {
+    info!("📊 监控数据消息 from: {}", node_id);
+    
+    // 解析监控数据
+    let metric_data: MetricData = match serde_json::from_value(msg.data.clone()) {
+        Ok(data) => data,
+        Err(e) => {
+            let error_msg = json!({
+                "type": "error",
+                "id": msg.id,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "data": {
+                    "error_code": "INVALID_METRIC_DATA",
+                    "message": "监控数据格式错误",
+                    "details": e.to_string()
+                }
+            });
+            socket.send(Message::Text(error_msg.to_string().into())).await?;
+            return Err(e.into());
+        }
+    };
+    
+    // 保存监控数据到数据库
+    let db = state.database.lock().await;
+    
+    // 首先检查节点是否存在，如果不存在则创建
+    let node_exists = match crate::models::Node::find_by_node_id(&db.pool, node_id).await {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(e) => {
+            error!("检查节点存在失败: {}", e);
+            false
+        }
+    };
+    
+    if !node_exists {
+        // 节点不存在，自动创建节点
+        let node_data = crate::models::NodeCreate {
+            node_id: node_id.to_string(),
+            hostname: "unknown".to_string(),
+            ip_address: "0.0.0.0".to_string(),
+            os_info: None,
+        };
+        
+        match crate::models::Node::create(&db.pool, node_data).await {
+            Ok(_) => {
+                info!("✅ 自动创建节点: {}", node_id);
+                // 添加到连接管理器
+                state.connection_manager.add_connection(node_id.to_string()).await;
+            }
+            Err(e) => {
+                error!("❌ 自动创建节点失败: {}", e);
+                send_error_response(socket, &msg.id, "CREATE_NODE_FAILED", "自动创建节点失败", &e.to_string()).await?;
+                return Ok(());
+            }
+        }
+    }
+    
+    let metric_create = crate::models::MetricCreate {
+        node_id: node_id.to_string(),
+        cpu_usage: metric_data.cpu_usage,
+        memory_usage: metric_data.memory_usage,
+        disk_usage: metric_data.disk_usage,
+        load_average: metric_data.load_average,
+    };
+    
+    match crate::models::NodeMetric::create(&db.pool, metric_create).await {
+        Ok(metric) => {
+            info!("✅ 监控数据保存成功: {}", node_id);
+            
+            let response = json!({
+                "type": "metrics_response",
+                "id": msg.id,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "data": {
+                    "success": true,
+                    "message": "监控数据保存成功",
+                    "node_id": node_id,
+                    "metric_id": metric.id
+                }
+            });
+            
+            socket.send(Message::Text(response.to_string().into())).await?;
+        }
+        Err(e) => {
+            error!("❌ 保存监控数据失败: {}", e);
+            send_error_response(socket, &msg.id, "SAVE_METRICS_FAILED", "保存监控数据失败", &e.to_string()).await?;
+        }
+    }
+    
     Ok(())
 }
 

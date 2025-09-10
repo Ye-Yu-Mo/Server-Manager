@@ -24,3 +24,5 @@ config = { workspace = true }
 
 # Node特有的依赖
 url = "2.5"
+futures-util = "0.3.31"
+urlencoding = "2.1.3"

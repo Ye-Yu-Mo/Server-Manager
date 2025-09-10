@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 use anyhow::Result;
-
+use sqlx::Row;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct NodeMetric {
     pub id: i64,
@@ -134,6 +134,73 @@ impl NodeMetric {
         
         let metrics = query_builder.fetch_all(pool).await?;
         Ok(metrics)
+    }
+
+    /// 根据节点ID和时间范围查询监控数据（带分页）
+    pub async fn find_by_node_id_with_range(
+        pool: &SqlitePool,
+        node_id: &str,
+        start_time: Option<DateTime<Utc>>,
+        end_time: Option<DateTime<Utc>>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<NodeMetric>, i64)> {
+        // 构建基础查询
+        let mut sql = String::from("SELECT * FROM node_metrics WHERE node_id = ?");
+        let mut count_sql = String::from("SELECT COUNT(*) as total FROM node_metrics WHERE node_id = ?");
+        
+        if start_time.is_some() {
+            sql.push_str(" AND metric_time >= ?");
+            count_sql.push_str(" AND metric_time >= ?");
+        }
+        
+        if end_time.is_some() {
+            sql.push_str(" AND metric_time <= ?");
+            count_sql.push_str(" AND metric_time <= ?");
+        }
+        
+        sql.push_str(" ORDER BY metric_time DESC LIMIT ? OFFSET ?");
+        
+        // 查询数据
+        let mut query_builder = sqlx::query_as::<_, NodeMetric>(&sql)
+            .bind(node_id);
+        
+        let mut count_builder = sqlx::query(&count_sql)
+            .bind(node_id);
+        
+        if let Some(start_time) = start_time {
+            query_builder = query_builder.bind(start_time);
+            count_builder = count_builder.bind(start_time);
+        }
+        
+        if let Some(end_time) = end_time {
+            query_builder = query_builder.bind(end_time);
+            count_builder = count_builder.bind(end_time);
+        }
+        
+        let metrics = query_builder
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?;
+        
+        // 查询总数
+        let total: i64 = count_builder
+            .fetch_one(pool)
+            .await?
+            .get("total");
+        
+        Ok((metrics, total))
+    }
+
+    /// 获取节点最新监控数据（别名方法）
+    pub async fn find_latest_by_node_id(pool: &SqlitePool, node_id: &str) -> Result<Option<NodeMetric>> {
+        Self::get_latest_by_node(pool, node_id).await
+    }
+
+    /// 获取所有节点最新监控数据（别名方法）
+    pub async fn find_all_latest(pool: &SqlitePool) -> Result<Vec<NodeMetric>> {
+        Self::get_latest_all_nodes(pool).await
     }
     
     /// 获取节点最新监控数据

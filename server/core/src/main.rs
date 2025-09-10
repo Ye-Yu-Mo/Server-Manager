@@ -17,7 +17,14 @@ use tokio::sync::Mutex;
 use tracing::{info, warn, error};
 use tracing_subscriber;
 
-use crate::services::{nodes::{cleanup_stale_nodes, delete_node, get_node, get_node_stats, get_nodes}, websocket::{health_check, websocket_handler}};
+use crate::services::{
+    metrics::{
+        get_all_latest_metrics, get_latest_metrics, get_metrics_summary, 
+        get_node_metrics, get_system_metrics_stats
+    },
+    nodes::{cleanup_stale_nodes, delete_node, get_node, get_node_stats, get_nodes}, 
+    websocket::{health_check, websocket_handler}
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -66,6 +73,12 @@ async fn main() -> Result<()> {
         .route("/api/v1/nodes/{node_id}", delete(delete_node))
         .route("/api/v1/nodes/stats", get(get_node_stats))
         .route("/api/v1/nodes/cleanup", get(cleanup_stale_nodes))
+        // 监控数据API
+        .route("/api/v1/nodes/{node_id}/metrics/latest", get(get_latest_metrics))
+        .route("/api/v1/nodes/{node_id}/metrics", get(get_node_metrics))
+        .route("/api/v1/nodes/{node_id}/metrics/summary", get(get_metrics_summary))
+        .route("/api/v1/metrics/latest", get(get_all_latest_metrics))
+        .route("/api/v1/metrics/stats", get(get_system_metrics_stats))
         .with_state(shared_state);
     
     // 启动WebSocket服务器
