@@ -1,3 +1,5 @@
+import '../../../utils/format_utils.dart';
+
 class NodeMetric {
   final int id;
   final String nodeId;
@@ -11,6 +13,8 @@ class NodeMetric {
   // 新增字段来支持实时数据
   final int? memoryTotal;
   final int? memoryAvailable;
+  final int? diskTotal;
+  final int? diskAvailable;
   final int? uptime;
 
   NodeMetric({
@@ -24,6 +28,8 @@ class NodeMetric {
     required this.createdAt,
     this.memoryTotal,
     this.memoryAvailable,
+    this.diskTotal,
+    this.diskAvailable,
     this.uptime,
   });
 
@@ -43,6 +49,8 @@ class NodeMetric {
           : DateTime.now(),
       memoryTotal: json['memory_total']?.toInt(),
       memoryAvailable: json['memory_available']?.toInt(),
+      diskTotal: json['disk_total']?.toInt(),
+      diskAvailable: json['disk_available']?.toInt(),
       uptime: json['uptime']?.toInt(),
     );
   }
@@ -59,6 +67,8 @@ class NodeMetric {
       'created_at': createdAt.toIso8601String(),
       'memory_total': memoryTotal,
       'memory_available': memoryAvailable,
+      'disk_total': diskTotal,
+      'disk_available': diskAvailable,
       'uptime': uptime,
     };
   }
@@ -72,4 +82,21 @@ class NodeMetric {
   }
 
   bool get hasData => cpuUsage != null || memoryUsage != null || diskUsage != null;
+
+  // 格式化的数据显示方法
+  String get formattedCpuUsage => FormatUtils.formatCpuUsage(cpuUsage);
+  String get formattedLoadAverage => FormatUtils.formatLoadAverage(loadAverage);
+  String get formattedUptime => FormatUtils.formatUptime(uptime);
+  
+  // 详细的内存使用情况
+  String get formattedMemoryUsage => FormatUtils.formatMemoryUsage(memoryTotal, memoryAvailable);
+  
+  // 简化的内存使用情况
+  String get formattedMemorySimple => FormatUtils.formatMemorySimple(memoryTotal, memoryAvailable);
+  
+  // 详细的磁盘使用情况
+  String get formattedDiskUsage => FormatUtils.formatDiskUsage(diskTotal, diskAvailable, diskUsage);
+  
+  // 简化的磁盘使用情况
+  String get formattedDiskSimple => FormatUtils.formatDiskSimple(diskTotal, diskAvailable, diskUsage);
 }

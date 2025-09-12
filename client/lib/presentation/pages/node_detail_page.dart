@@ -199,13 +199,14 @@ class _NodeDetailPageState extends State<NodeDetailPage> {
             ),
             const SizedBox(height: 12),
             if (_latestMetric != null) ...[
-              _buildMetricRow('CPU使用率', '${_latestMetric!.cpuUsagePercent.toStringAsFixed(1)}%'),
-              _buildMetricRow('内存使用率', '${_latestMetric!.memoryUsagePercent.toStringAsFixed(1)}%'),
-              if (_latestMetric!.diskUsage != null)
-                _buildMetricRow('磁盘使用率', '${_latestMetric!.diskUsagePercent.toStringAsFixed(1)}%'),
+              _buildMetricRow('CPU使用率', _latestMetric!.formattedCpuUsage),
+              _buildMetricRow('内存详情', _latestMetric!.formattedMemoryUsage),
+              _buildMetricRow('磁盘详情', _latestMetric!.formattedDiskUsage),
               if (_latestMetric!.loadAverage != null)
-                _buildMetricRow('系统负载', _latestMetric!.loadAverage!.toStringAsFixed(2)),
-              _buildMetricRow('采集时间', _latestMetric!.metricTime.toLocal().toString()),
+                _buildMetricRow('系统负载', _latestMetric!.formattedLoadAverage),
+              if (_latestMetric!.uptime != null)
+                _buildMetricRow('运行时间', _latestMetric!.formattedUptime),
+              _buildMetricRow('采集时间', _latestMetric!.formattedTime),
               const SizedBox(height: 8),
               ElevatedButton(
                 onPressed: _refreshData,
@@ -376,12 +377,13 @@ class _NodeDetailPageState extends State<NodeDetailPage> {
           ),
           TextButton(
             onPressed: () async {
-              Navigator.pop(context);
+              final navigator = Navigator.of(context);
+              navigator.pop(); // 关闭对话框
               if (!mounted) return;
               final provider = Provider.of<NodeProvider>(context, listen: false);
               final success = await provider.deleteNode(_node!.nodeId);
               if (success && mounted) {
-                Navigator.pop(context); // 返回上一页
+                navigator.pop(); // 返回上一页
               }
             },
             child: const Text('删除', style: TextStyle(color: Colors.red)),

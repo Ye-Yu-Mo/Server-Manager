@@ -282,10 +282,11 @@ class _NodeListPageState extends State<NodeListPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 4),
-        Text('CPU: ${metric.cpuUsagePercent.toStringAsFixed(1)}%'),
-        Text('内存: ${metric.memoryUsagePercent.toStringAsFixed(1)}%'),
-        if (metric.diskUsage != null)
-          Text('磁盘: ${metric.diskUsagePercent.toStringAsFixed(1)}%'),
+        Text('CPU: ${metric.formattedCpuUsage}'),
+        Text(metric.formattedMemorySimple),
+        Text(metric.formattedDiskSimple),
+        if (metric.loadAverage != null)
+          Text('负载: ${metric.formattedLoadAverage}'),
       ],
     );
   }
