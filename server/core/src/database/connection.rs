@@ -59,9 +59,11 @@ impl Database {
             .await?
             .get("count");
             
-        if table_count > 0 {
-            info!("数据库已存在表结构，跳过迁移");
-            return Ok(());
+        let is_fresh_database = table_count == 0;
+        
+        if !is_fresh_database {
+            info!("检测到现有数据库，执行渐进式迁移...");
+            self.migrate_existing_database().await?;
         }
         
         // 创建nodes表
@@ -90,7 +92,12 @@ impl Database {
                 cpu_usage REAL,
                 memory_usage REAL,
                 disk_usage REAL,
+                disk_total INTEGER,
+                disk_available INTEGER,
                 load_average REAL,
+                memory_total INTEGER,
+                memory_available INTEGER,
+                uptime INTEGER,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (node_id) REFERENCES nodes(node_id) ON DELETE CASCADE
             )
@@ -141,6 +148,59 @@ impl Database {
             .await?;
         
         info!("✅ 数据库迁移完成");
+        Ok(())
+    }
+
+    /// 迁移现有数据库
+    async fn migrate_existing_database(&self) -> Result<()> {
+        info!("正在更新现有数据库表结构...");
+        
+        // 检查node_metrics表是否缺少新字段
+        let table_info = sqlx::query("PRAGMA table_info(node_metrics)")
+            .fetch_all(&self.pool)
+            .await?;
+        
+        let column_names: Vec<String> = table_info.iter()
+            .map(|row| row.get::<String, _>("name"))
+            .collect();
+        
+        // 检查并添加缺失的字段
+        if !column_names.contains(&"disk_total".to_string()) {
+            info!("添加 disk_total 字段...");
+            sqlx::query("ALTER TABLE node_metrics ADD COLUMN disk_total INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        
+        if !column_names.contains(&"disk_available".to_string()) {
+            info!("添加 disk_available 字段...");
+            sqlx::query("ALTER TABLE node_metrics ADD COLUMN disk_available INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        
+        if !column_names.contains(&"memory_total".to_string()) {
+            info!("添加 memory_total 字段...");
+            sqlx::query("ALTER TABLE node_metrics ADD COLUMN memory_total INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        
+        if !column_names.contains(&"memory_available".to_string()) {
+            info!("添加 memory_available 字段...");
+            sqlx::query("ALTER TABLE node_metrics ADD COLUMN memory_available INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        
+        if !column_names.contains(&"uptime".to_string()) {
+            info!("添加 uptime 字段...");
+            sqlx::query("ALTER TABLE node_metrics ADD COLUMN uptime INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        
+        info!("✅ 数据库表结构更新完成");
         Ok(())
     }
     

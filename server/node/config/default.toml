@@ -2,7 +2,7 @@
 
 [core]
 # Core服务地址
-url = "ws://localhost:9999/api/v1/ws"
+url = "ws://0.0.0.0:9999/api/v1/ws"
 # 认证令牌
 token = "default-token"
 # 节点ID (可选，不设置时自动生成)

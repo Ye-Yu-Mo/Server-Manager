@@ -11,7 +11,12 @@ pub struct NodeMetric {
     pub cpu_usage: Option<f64>,
     pub memory_usage: Option<f64>,
     pub disk_usage: Option<f64>,
+    pub disk_total: Option<i64>,
+    pub disk_available: Option<i64>,
     pub load_average: Option<f64>,
+    pub memory_total: Option<i64>,
+    pub memory_available: Option<i64>,
+    pub uptime: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -21,7 +26,12 @@ pub struct MetricCreate {
     pub cpu_usage: Option<f64>,
     pub memory_usage: Option<f64>,
     pub disk_usage: Option<f64>,
+    pub disk_total: Option<i64>,
+    pub disk_available: Option<i64>,
     pub load_average: Option<f64>,
+    pub memory_total: Option<i64>,
+    pub memory_available: Option<i64>,
+    pub uptime: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,15 +60,23 @@ impl NodeMetric {
     /// 创建新的监控记录
     pub async fn create(pool: &SqlitePool, metric_data: MetricCreate) -> Result<NodeMetric> {
         let metric = sqlx::query_as::<_, NodeMetric>(r#"
-            INSERT INTO node_metrics (node_id, metric_time, cpu_usage, memory_usage, disk_usage, load_average)
-            VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
+            INSERT INTO node_metrics (
+                node_id, metric_time, cpu_usage, memory_usage, disk_usage, 
+                disk_total, disk_available, load_average, memory_total, memory_available, uptime
+            )
+            VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
         "#)
         .bind(&metric_data.node_id)
         .bind(metric_data.cpu_usage)
         .bind(metric_data.memory_usage)
         .bind(metric_data.disk_usage)
+        .bind(metric_data.disk_total)
+        .bind(metric_data.disk_available)
         .bind(metric_data.load_average)
+        .bind(metric_data.memory_total)
+        .bind(metric_data.memory_available)
+        .bind(metric_data.uptime)
         .fetch_one(pool)
         .await?;
         
@@ -71,14 +89,22 @@ impl NodeMetric {
         
         for metric_data in metrics {
             sqlx::query(r#"
-                INSERT INTO node_metrics (node_id, metric_time, cpu_usage, memory_usage, disk_usage, load_average)
-                VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
+                INSERT INTO node_metrics (
+                    node_id, metric_time, cpu_usage, memory_usage, disk_usage, 
+                    disk_total, disk_available, load_average, memory_total, memory_available, uptime
+                )
+                VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#)
             .bind(&metric_data.node_id)
             .bind(metric_data.cpu_usage)
             .bind(metric_data.memory_usage)
             .bind(metric_data.disk_usage)
+            .bind(metric_data.disk_total)
+            .bind(metric_data.disk_available)
             .bind(metric_data.load_average)
+            .bind(metric_data.memory_total)
+            .bind(metric_data.memory_available)
+            .bind(metric_data.uptime)
             .execute(&mut *tx)
             .await?;
         }

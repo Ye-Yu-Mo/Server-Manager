@@ -12,7 +12,8 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  final TextEditingController _serverUrlController = TextEditingController();
+  final TextEditingController _serverIpController = TextEditingController();
+  final TextEditingController _serverPortController = TextEditingController();
   final TextEditingController _apiTokenController = TextEditingController();
   bool _isLoading = false;
   String? _error;
@@ -20,6 +21,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _autoRefresh = true;
   int _refreshInterval = 30;
   bool _showToken = false;
+  bool _useHttps = false;
 
   @override
   void initState() {
@@ -28,6 +30,8 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _loadSettings() async {
+    if (!mounted) return;
+    
     setState(() {
       _isLoading = true;
     });
@@ -36,8 +40,9 @@ class _SettingsPageState extends State<SettingsPage> {
       final prefs = await SharedPreferences.getInstance();
       
       // 加载服务器URL设置
-      final serverUrl = prefs.getString('server_url') ?? 'http://127.0.0.1:9999/api/v1';
-      _serverUrlController.text = serverUrl;
+      final serverUrl = prefs.getString('server_url') ?? '';
+      // 解析URL为IP和端口
+      _parseUrlToFields(serverUrl);
 
       // 加载API Token设置
       final apiToken = prefs.getString('api_token') ?? '';
@@ -49,10 +54,15 @@ class _SettingsPageState extends State<SettingsPage> {
       // 加载刷新间隔设置
       _refreshInterval = prefs.getInt('refresh_interval') ?? 30;
 
+      // 加载HTTPS设置
+      _useHttps = prefs.getBool('use_https') ?? false;
+
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _error = '加载设置失败: $e';
@@ -60,7 +70,48 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  /// 解析URL为IP和端口字段
+  void _parseUrlToFields(String url) {
+    try {
+      final uri = Uri.parse(url);
+      _serverIpController.text = uri.host;
+      _serverPortController.text = uri.port.toString();
+      _useHttps = uri.scheme == 'https';
+    } catch (e) {
+      // 如果解析失败，留空让用户填写
+      _serverIpController.text = '';
+      _serverPortController.text = '';
+      _useHttps = false;
+    }
+  }
+
+  /// 从字段构建完整的URL
+  String _buildServerUrl() {
+    final protocol = _useHttps ? 'https' : 'http';
+    final ip = _serverIpController.text.trim();
+    final port = _serverPortController.text.trim();
+    
+    if (ip.isEmpty || port.isEmpty) {
+      throw Exception('服务器IP和端口不能为空');
+    }
+    
+    // 验证IP地址格式
+    if (!RegExp(r'^(\d{1,3}\.){3}\d{1,3}$').hasMatch(ip) && ip != 'localhost') {
+      throw Exception('请输入有效的IP地址或localhost');
+    }
+    
+    // 验证端口格式
+    final portNum = int.tryParse(port);
+    if (portNum == null || portNum < 1 || portNum > 65535) {
+      throw Exception('请输入有效的端口号 (1-65535)');
+    }
+    
+    return '$protocol://$ip:$port/api/v1';
+  }
+
   Future<void> _saveSettings() async {
+    if (!mounted) return;
+    
     setState(() {
       _isLoading = true;
       _error = null;
@@ -69,43 +120,26 @@ class _SettingsPageState extends State<SettingsPage> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final provider = Provider.of<NodeProvider>(context, listen: false);
-
-      // 验证服务器URL格式
-      String serverUrl = _serverUrlController.text.trim();
-      if (serverUrl.isEmpty) {
-        throw Exception('服务器URL不能为空');
-      }
-
-      if (!serverUrl.startsWith('http://') && !serverUrl.startsWith('https://')) {
-        throw Exception('服务器URL必须以 http:// 或 https:// 开头');
-      }
-
-      // 确保包含API版本路径
-      if (!serverUrl.contains('/api/v1')) {
-        // 移除尾部斜杠避免双斜杠
-        serverUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-        // 确保URL以斜杠结尾，然后添加api/v1
-        if (!serverUrl.endsWith('/')) {
-          serverUrl = '$serverUrl/';
-        }
-        serverUrl = '${serverUrl}api/v1';
-      } else {
-        // 如果已经包含api/v1，确保格式正确
-        serverUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-      }
+      
+      // 从字段构建完整的URL
+      final serverUrl = _buildServerUrl();
 
       // 保存设置
       await prefs.setString('server_url', serverUrl);
       await prefs.setString('api_token', _apiTokenController.text.trim());
       await prefs.setBool('auto_refresh', _autoRefresh);
       await prefs.setInt('refresh_interval', _refreshInterval);
+      await prefs.setBool('use_https', _useHttps);
 
+      // 在setState之前获取Provider引用
+      if (!mounted) return;
+      final provider = Provider.of<NodeProvider>(context, listen: false);
+      
       // 更新Provider中的服务器URL和Token
-      print('🔧 保存的服务器URL: $serverUrl');
       provider.setBaseUrl(serverUrl);
       provider.setApiToken(_apiTokenController.text.trim());
 
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _success = '设置保存成功';
@@ -120,6 +154,7 @@ class _SettingsPageState extends State<SettingsPage> {
         }
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _error = '保存设置失败: $e';
@@ -128,6 +163,8 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _testConnection() async {
+    if (!mounted) return;
+    
     setState(() {
       _isLoading = true;
       _error = null;
@@ -136,25 +173,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
     try {
       final provider = Provider.of<NodeProvider>(context, listen: false);
-      String serverUrl = _serverUrlController.text.trim();
-
-      if (serverUrl.isEmpty) {
-        throw Exception('请先输入服务器URL');
-      }
-
-      // 确保包含API版本路径
-      if (!serverUrl.contains('/api/v1')) {
-        // 移除尾部斜杠避免双斜杠
-        serverUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-        // 确保URL以斜杠结尾，然后添加api/v1
-        if (!serverUrl.endsWith('/')) {
-          serverUrl = '$serverUrl/';
-        }
-        serverUrl = '${serverUrl}api/v1';
-      } else {
-        // 如果已经包含api/v1，确保格式正确
-        serverUrl = serverUrl.replaceAll(RegExp(r'/+$'), '');
-      }
+      
+      // 从字段构建完整的URL
+      final serverUrl = _buildServerUrl();
 
       // 临时设置URL和Token进行测试
       provider.setBaseUrl(serverUrl);
@@ -162,6 +183,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
       final isHealthy = await provider.checkHealth();
       
+      if (!mounted) return;
       if (isHealthy) {
         setState(() {
           _isLoading = false;
@@ -180,6 +202,7 @@ class _SettingsPageState extends State<SettingsPage> {
         }
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _error = '连接测试失败: $e';
@@ -188,10 +211,12 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void _resetToDefaults() {
-    _serverUrlController.text = 'http://127.0.0.1:9999/api/v1';
+    _serverIpController.text = '';
+    _serverPortController.text = '';
     _apiTokenController.text = '';
     _autoRefresh = true;
     _refreshInterval = 30;
+    _useHttps = false;
     
     setState(() {
       _error = null;
@@ -208,9 +233,32 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
+  /// 更新自动刷新设置
+  void _updateAutoRefresh(bool value) {
+    setState(() {
+      _autoRefresh = value;
+    });
+    
+    // 立即应用到NodeProvider
+    final provider = Provider.of<NodeProvider>(context, listen: false);
+    provider.setAutoRefresh(_autoRefresh, interval: _refreshInterval);
+  }
+
+  /// 更新刷新间隔设置
+  void _updateRefreshInterval(int value) {
+    setState(() {
+      _refreshInterval = value;
+    });
+    
+    // 立即应用到NodeProvider
+    final provider = Provider.of<NodeProvider>(context, listen: false);
+    provider.setAutoRefresh(_autoRefresh, interval: _refreshInterval);
+  }
+
   @override
   void dispose() {
-    _serverUrlController.dispose();
+    _serverIpController.dispose();
+    _serverPortController.dispose();
     _apiTokenController.dispose();
     super.dispose();
   }
@@ -316,17 +364,47 @@ class _SettingsPageState extends State<SettingsPage> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
+            
+            // IP地址输入
             TextField(
-              controller: _serverUrlController,
+              controller: _serverIpController,
               decoration: const InputDecoration(
-                labelText: '服务器URL',
-                hintText: 'http://127.0.0.1:9999',
+                labelText: '服务器IP地址',
+                hintText: '例如: 192.168.1.100 或 localhost',
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.dns),
               ),
               keyboardType: TextInputType.url,
             ),
             const SizedBox(height: 16),
+            
+            // 端口输入
+            TextField(
+              controller: _serverPortController,
+              decoration: const InputDecoration(
+                labelText: '服务器端口',
+                hintText: '例如: 20001',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.settings_ethernet),
+              ),
+              keyboardType: TextInputType.number,
+            ),
+            const SizedBox(height: 16),
+            
+            // HTTPS开关
+            SwitchListTile(
+              title: const Text('使用HTTPS'),
+              subtitle: const Text('启用安全连接'),
+              value: _useHttps,
+              onChanged: (value) {
+                setState(() {
+                  _useHttps = value;
+                });
+              },
+            ),
+            const SizedBox(height: 16),
+            
+            // API Token输入
             TextField(
               controller: _apiTokenController,
               decoration: InputDecoration(
@@ -348,6 +426,8 @@ class _SettingsPageState extends State<SettingsPage> {
               obscureText: !_showToken,
             ),
             const SizedBox(height: 16),
+            
+            // 测试连接按钮
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
@@ -395,9 +475,7 @@ class _SettingsPageState extends State<SettingsPage> {
               subtitle: const Text('启用后自动刷新节点和监控数据'),
               value: _autoRefresh,
               onChanged: (value) {
-                setState(() {
-                  _autoRefresh = value;
-                });
+                _updateAutoRefresh(value);
               },
             ),
             const SizedBox(height: 8),
@@ -414,9 +492,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
                 onChanged: (value) {
                   if (value != null) {
-                    setState(() {
-                      _refreshInterval = value;
-                    });
+                    _updateRefreshInterval(value);
                   }
                 },
               ),

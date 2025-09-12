@@ -105,7 +105,10 @@ pub async fn get_all_latest_metrics(
     
     match NodeMetric::find_all_latest(&db.pool).await {
         Ok(metrics) => {
-            Json(NodeServiceResponse::success(metrics, "获取所有节点最新监控数据成功"))
+            let response_data = json!({
+                "metrics": metrics
+            });
+            Json(NodeServiceResponse::success(response_data, "获取所有节点最新监控数据成功"))
         }
         Err(e) => {
             error!("获取所有节点最新监控数据失败: {}", e);

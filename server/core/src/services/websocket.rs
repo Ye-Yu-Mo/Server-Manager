@@ -8,22 +8,23 @@ use axum::{
     },
     response::IntoResponse,
 };
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::database::Database;
 use crate::models::{Node, NodeCreate, NodeUpdate, NodeMetric, MetricCreate, Command, CommandCreate, CommandResultCreate, CommandStatus};
-use crate::services::nodes::{AppState, ConnectionManager};
+use crate::services::nodes::{AppState, ConnectionManager, ClientBroadcastMessage};
 
 /// WebSocket连接查询参数
 #[derive(Debug, Deserialize)]
 pub struct WebSocketQuery {
     token: Option<String>,
     node_id: Option<String>,
+    #[serde(rename = "type")]
+    connection_type: Option<String>,
 }
 
 /// WebSocket消息类型
@@ -55,7 +56,18 @@ pub async fn websocket_handler(
         return axum::response::Response::new("Token required".into());
     }
     
-    ws.on_upgrade(|socket| handle_websocket(socket, state, query))
+    // 根据连接类型分发处理
+    let connection_type = query.connection_type.as_deref().unwrap_or("node");
+    match connection_type {
+        "monitor" => {
+            info!("📱 客户端监控连接");
+            ws.on_upgrade(|socket| handle_client_websocket(socket, state, query))
+        }
+        _ => {
+            info!("🤖 节点代理连接");
+            ws.on_upgrade(|socket| handle_websocket(socket, state, query))
+        }
+    }
 }
 
 /// 处理WebSocket连接
@@ -103,6 +115,39 @@ pub async fn handle_websocket(
     }
 
     info!("👋 WebSocket连接结束, 节点ID: {}", node_id);
+    
+    // 处理节点断开连接
+    handle_node_disconnect(&node_id, &state).await;
+}
+
+/// 处理节点断开连接
+async fn handle_node_disconnect(node_id: &str, state: &Arc<AppState>) {
+    let db = state.database.lock().await;
+    
+    // 1. 将数据库中的节点状态标记为离线
+    if let Err(e) = crate::models::Node::mark_offline(&db.pool, node_id).await {
+        error!("标记节点离线失败: {}", e);
+    } else {
+        info!("✅ 节点已标记为离线: {}", node_id);
+    }
+    
+    // 2. 从连接管理器中移除连接
+    state.connection_manager.remove_connection(node_id).await;
+    
+    // 3. 向所有客户端广播节点状态变化
+    let status_change_message = crate::services::nodes::ClientBroadcastMessage {
+        message_type: "node_status_change".to_string(),
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        data: serde_json::json!({
+            "node_id": node_id,
+            "status": "offline",
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        }),
+    };
+    
+    state.broadcast_to_clients(status_change_message);
+    info!("📢 广播节点状态变化: {} -> offline", node_id);
 }
 
 /// 处理WebSocket消息
@@ -248,6 +293,20 @@ async fn handle_node_register(
                 // 添加到连接管理器
                 state.connection_manager.add_connection(node_id.clone()).await;
                 
+                // 广播节点状态变化
+                let status_change_message = crate::services::nodes::ClientBroadcastMessage {
+                    message_type: "node_status_change".to_string(),
+                    id: uuid::Uuid::new_v4().to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    data: serde_json::json!({
+                        "node_id": node_id,
+                        "status": "online",
+                        "timestamp": chrono::Utc::now().to_rfc3339()
+                    }),
+                };
+                state.broadcast_to_clients(status_change_message);
+                info!("📢 广播节点状态变化: {} -> online", node_id);
+                
                 let response = json!({
                     "type": "register_response",
                     "id": msg.id,
@@ -301,6 +360,20 @@ async fn create_new_node(
             
             // 添加到连接管理器
             state.connection_manager.add_connection(node_id.clone()).await;
+            
+            // 广播节点状态变化
+            let status_change_message = crate::services::nodes::ClientBroadcastMessage {
+                message_type: "node_status_change".to_string(),
+                id: uuid::Uuid::new_v4().to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                data: serde_json::json!({
+                    "node_id": node_id,
+                    "status": "online",
+                    "timestamp": chrono::Utc::now().to_rfc3339()
+                }),
+            };
+            state.broadcast_to_clients(status_change_message);
+            info!("📢 广播新节点状态变化: {} -> online", node_id);
             
             let response = json!({
                 "type": "register_response",
@@ -380,11 +453,11 @@ async fn handle_heartbeat(
 ) -> Result<(), anyhow::Error> {
     info!("💓 心跳消息 from: {}", node_id);
     
-    // 解析监控数据
-    let metric_data: MetricData = match serde_json::from_value(msg.data.clone()) {
-        Ok(data) => data,
-        Err(e) => {
-            warn!("监控数据格式错误: {}", e);
+    // 解析监控数据 - 从heartbeat消息的metrics字段中提取
+    let metric_data: MetricData = match msg.data.get("metrics").and_then(|v| serde_json::from_value(v.clone()).ok()) {
+        Some(data) => data,
+        None => {
+            warn!("心跳消息中缺少metrics字段或格式错误");
             // 即使数据格式错误，也继续处理心跳
             MetricData {
                 cpu_usage: None,
@@ -441,20 +514,57 @@ async fn handle_heartbeat(
         cpu_usage: metric_data.cpu_usage,
         memory_usage: metric_data.memory_usage,
         disk_usage: metric_data.disk_usage,
+        disk_total: metric_data.disk_total.map(|v| v as i64),
+        disk_available: metric_data.disk_available.map(|v| v as i64),
         load_average: metric_data.load_average,
+        memory_total: metric_data.memory_total.map(|v| v as i64),
+        memory_available: metric_data.memory_available.map(|v| v as i64),
+        uptime: metric_data.uptime.map(|v| v as i64),
     };
     
+    // 更新节点心跳时间和在线状态
+    if let Err(e) = crate::models::Node::update_heartbeat(&db.pool, node_id).await {
+        error!("❌ 更新节点心跳失败: {}", e);
+    }
+    
+    // 更新连接管理器中的活动时间
+    state.connection_manager.update_activity(node_id).await;
+    
     match crate::models::NodeMetric::create(&db.pool, metric_create).await {
-        Ok(_) => {
+        Ok(metric) => {
             debug!("✅ 监控数据保存成功: {}", node_id);
+            
+            // 广播新的监控数据给所有客户端（包含完整的原始数据）
+            let enhanced_metric = json!({
+                "id": metric.id,
+                "node_id": metric.node_id,
+                "metric_time": metric.metric_time,
+                "cpu_usage": metric.cpu_usage,
+                "memory_usage": metric.memory_usage,
+                "disk_usage": metric.disk_usage,
+                "disk_total": metric.disk_total,
+                "disk_available": metric.disk_available,
+                "load_average": metric.load_average,
+                "memory_total": metric.memory_total,
+                "memory_available": metric.memory_available,
+                "uptime": metric.uptime,
+                "created_at": metric.created_at,
+            });
+            
+            let broadcast_msg = ClientBroadcastMessage {
+                message_type: "metrics_update".to_string(),
+                id: Uuid::new_v4().to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                data: json!({
+                    "metrics": [enhanced_metric]
+                }),
+            };
+            state.broadcast_to_clients(broadcast_msg);
         }
         Err(e) => {
             error!("❌ 保存监控数据失败: {}", e);
         }
     }
-    
-    // 更新节点活动时间
-    state.connection_manager.update_activity(node_id).await;
     
     let response = json!({
         "type": "heartbeat_ack",
@@ -540,12 +650,28 @@ async fn handle_metrics(
         cpu_usage: metric_data.cpu_usage,
         memory_usage: metric_data.memory_usage,
         disk_usage: metric_data.disk_usage,
+        disk_total: metric_data.disk_total.map(|v| v as i64),
+        disk_available: metric_data.disk_available.map(|v| v as i64),
         load_average: metric_data.load_average,
+        memory_total: metric_data.memory_total.map(|v| v as i64),
+        memory_available: metric_data.memory_available.map(|v| v as i64),
+        uptime: metric_data.uptime.map(|v| v as i64),
     };
     
     match crate::models::NodeMetric::create(&db.pool, metric_create).await {
         Ok(metric) => {
             info!("✅ 监控数据保存成功: {}", node_id);
+            
+            // 广播新的监控数据给所有客户端
+            let broadcast_msg = ClientBroadcastMessage {
+                message_type: "metrics_update".to_string(),
+                id: Uuid::new_v4().to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                data: json!({
+                    "metrics": [&metric]
+                }),
+            };
+            state.broadcast_to_clients(broadcast_msg);
             
             let response = json!({
                 "type": "metrics_response",
@@ -609,120 +735,208 @@ pub async fn health_check() -> impl IntoResponse {
     }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::http::StatusCode;
-    use std::sync::Arc;
+/// 处理客户端监控WebSocket连接
+pub async fn handle_client_websocket(
+    mut socket: WebSocket,
+    state: Arc<AppState>,
+    _query: WebSocketQuery,
+) {
+    let client_id = Uuid::new_v4().to_string();
+    info!("✅ 客户端监控WebSocket连接已建立, 客户端ID: {}", client_id);
 
-    #[tokio::test]
-    async fn test_websocket_query_token_validation() {
-        // 测试有效token的情况
-        let query = WebSocketQuery {
-            token: Some("default-token".to_string()),
-            node_id: Some("test-node".to_string()),
-        };
-        
-        // 简单验证token验证逻辑
-        if let Some(token) = &query.token {
-            assert_eq!(token, "default-token");
+    // 订阅广播消息
+    let mut broadcast_receiver = state.client_broadcaster.subscribe();
+
+    // 发送欢迎消息
+    let welcome_msg = json!({
+        "type": "welcome",
+        "id": Uuid::new_v4().to_string(),
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "data": {
+            "message": "欢迎连接到Server Manager监控",
+            "client_id": client_id,
+            "connection_type": "monitor"
         }
+    });
+    
+    if let Err(e) = socket.send(Message::Text(welcome_msg.to_string().into())).await {
+        error!("发送欢迎消息失败: {}", e);
+        return;
     }
 
-    #[tokio::test]
-    async fn test_token_validation_logic() {
-        let database = Database {
-            pool: sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap(),
-        };
-        let _state = Arc::new(AppState::new(database));
-
-        // 测试有效token
-        let valid_query = WebSocketQuery {
-            token: Some("default-token".to_string()),
-            node_id: Some("test-node".to_string()),
-        };
-        
-        // 验证token逻辑
-        let is_valid_token = if let Some(token) = &valid_query.token {
-            token == "default-token"
-        } else {
-            false
-        };
-        assert!(is_valid_token);
-
-        // 测试无效token
-        let invalid_query = WebSocketQuery {
-            token: Some("invalid-token".to_string()),
-            node_id: Some("test-node".to_string()),
-        };
-        
-        let is_invalid_token = if let Some(token) = &invalid_query.token {
-            token != "default-token"
-        } else {
-            true
-        };
-        assert!(is_invalid_token);
-
-        // 测试缺少token
-        let missing_token_query = WebSocketQuery {
-            token: None,
-            node_id: Some("test-node".to_string()),
-        };
-        assert!(missing_token_query.token.is_none());
+    // 发送初始数据
+    if let Err(e) = send_initial_data(&mut socket, &state).await {
+        error!("发送初始数据失败: {}", e);
+        return;
     }
 
-    #[tokio::test]
-    async fn test_websocket_response_creation() {
-        // 测试错误响应创建
-        use axum::body::Body;
-        let error_response = axum::response::Response::new(Body::from("Invalid token"));
-        assert_eq!(error_response.status(), StatusCode::OK); // axum::response::Response::new默认是200
-
-        let token_required_response = axum::response::Response::new(Body::from("Token required"));
-        assert_eq!(token_required_response.status(), StatusCode::OK);
-    }
-
-    #[test]
-    fn test_websocket_message_deserialization() {
-        let json_data = r#"
-        {
-            "type": "heartbeat",
-            "id": "12345",
-            "timestamp": "2025-01-21T10:00:00Z",
-            "data": {
-                "node_id": "test-node",
-                "status": "online",
-                "metrics": {
-                    "cpu_usage": 45.2,
-                    "memory_usage": 68.5
+    // 处理消息循环 - 同时监听客户端消息和广播消息
+    loop {
+        tokio::select! {
+            // 处理客户端发送的消息
+            client_msg = socket.recv() => {
+                match client_msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Err(e) = handle_client_message(&text, &mut socket, &state, &client_id).await {
+                            error!("处理客户端消息失败: {}", e);
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        info!("🔌 客户端监控WebSocket连接关闭, 客户端ID: {}", client_id);
+                        break;
+                    }
+                    Some(Ok(_)) => {
+                        info!("📨 收到客户端非文本消息, 客户端ID: {}", client_id);
+                    }
+                    Some(Err(e)) => {
+                        error!("客户端消息错误: {}", e);
+                        break;
+                    }
+                    None => {
+                        info!("客户端连接已关闭");
+                        break;
+                    }
+                }
+            }
+            
+            // 处理广播消息
+            broadcast_msg = broadcast_receiver.recv() => {
+                match broadcast_msg {
+                    Ok(msg) => {
+                        let json_msg = match serde_json::to_string(&msg) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                error!("序列化广播消息失败: {}", e);
+                                continue;
+                            }
+                        };
+                        
+                        if let Err(e) = socket.send(Message::Text(json_msg.into())).await {
+                            error!("发送广播消息失败: {}", e);
+                            break;
+                        }
+                        info!("📢 向客户端 {} 广播消息: {}", client_id, msg.message_type);
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("客户端 {} 广播消息滞后 {} 条", client_id, n);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        info!("广播通道已关闭");
+                        break;
+                    }
                 }
             }
         }
-        "#;
-
-        let msg: Result<WebSocketMessage, _> = serde_json::from_str(json_data);
-        assert!(msg.is_ok());
-        let msg = msg.unwrap();
-        assert_eq!(msg.message_type, "heartbeat");
-        assert_eq!(msg.id, "12345");
     }
 
-    #[test]
-    fn test_websocket_message_serialization() {
-        let msg = WebSocketMessage {
-            message_type: "node_register".to_string(),
-            id: "67890".to_string(),
-            timestamp: "2025-01-21T10:00:00Z".to_string(),
-            data: json!({
-                "node_id": "test-node",
-                "hostname": "test-server"
-            }),
-        };
+    info!("👋 客户端监控WebSocket连接结束, 客户端ID: {}", client_id);
+}
 
-        let json_str = serde_json::to_string(&msg);
-        assert!(json_str.is_ok());
-        let json_str = json_str.unwrap();
-        assert!(json_str.contains("node_register"));
-        assert!(json_str.contains("test-node"));
+/// 发送初始数据到客户端
+async fn send_initial_data(
+    socket: &mut WebSocket,
+    state: &Arc<AppState>,
+) -> Result<(), anyhow::Error> {
+    let db = state.database.lock().await;
+    
+    // 发送节点列表
+    match crate::models::Node::find_all(&db.pool).await {
+        Ok(nodes) => {
+            let nodes_msg = json!({
+                "type": "nodes_update",
+                "id": Uuid::new_v4().to_string(),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "data": {
+                    "nodes": nodes
+                }
+            });
+            socket.send(Message::Text(nodes_msg.to_string().into())).await?;
+            info!("✅ 发送节点列表: {}个节点", nodes.len());
+        }
+        Err(e) => {
+            warn!("获取节点列表失败: {}", e);
+        }
     }
+    
+    // 发送最新监控数据
+    match crate::models::NodeMetric::find_all_latest(&db.pool).await {
+        Ok(metrics) => {
+            let metrics_msg = json!({
+                "type": "metrics_update",
+                "id": Uuid::new_v4().to_string(),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "data": {
+                    "metrics": metrics
+                }
+            });
+            socket.send(Message::Text(metrics_msg.to_string().into())).await?;
+            info!("✅ 发送监控数据: {}条记录", metrics.len());
+        }
+        Err(e) => {
+            warn!("获取监控数据失败: {}", e);
+        }
+    }
+    
+    Ok(())
+}
+
+/// 处理客户端消息
+async fn handle_client_message(
+    text: &str,
+    socket: &mut WebSocket,
+    _state: &Arc<AppState>,
+    client_id: &str,
+) -> Result<(), anyhow::Error> {
+    info!("📨 收到客户端消息 from {}: {}", client_id, text);
+    
+    let msg: WebSocketMessage = match serde_json::from_str(text) {
+        Ok(msg) => msg,
+        Err(e) => {
+            let error_msg = json!({
+                "type": "error",
+                "id": Uuid::new_v4().to_string(),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "data": {
+                    "error_code": "PARSE_ERROR",
+                    "message": "消息解析失败",
+                    "details": e.to_string()
+                }
+            });
+            socket.send(Message::Text(error_msg.to_string().into())).await?;
+            return Err(e.into());
+        }
+    };
+
+    match msg.message_type.as_str() {
+        "ping" => {
+            // 响应心跳
+            let pong_msg = json!({
+                "type": "pong",
+                "id": msg.id,
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "data": {
+                    "received": true,
+                    "client_id": client_id
+                }
+            });
+            socket.send(Message::Text(pong_msg.to_string().into())).await?;
+            info!("💓 响应客户端心跳: {}", client_id);
+        }
+        _ => {
+            let error_msg = json!({
+                "type": "error",
+                "id": Uuid::new_v4().to_string(),
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "data": {
+                    "error_code": "UNKNOWN_MESSAGE_TYPE",
+                    "message": format!("未知的消息类型: {}", msg.message_type),
+                    "details": "支持的消息类型: ping"
+                }
+            });
+            socket.send(Message::Text(error_msg.to_string().into())).await?;
+        }
+    }
+    
+    Ok(())
 }

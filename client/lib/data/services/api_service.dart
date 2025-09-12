@@ -1,27 +1,17 @@
-import 'dart:io';
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import '../models/node.dart';
 import '../models/metric.dart';
 
 class ApiService {
   final Dio _dio;
-  String _baseUrl = 'http://127.0.0.1:9999/api/v1';
+  String _baseUrl = '';
   String? _apiToken;
 
   ApiService() : _dio = Dio(BaseOptions(
-    baseUrl: 'http://127.0.0.1:9999/api/v1',
+    baseUrl: '',
     connectTimeout: const Duration(seconds: 10),
     receiveTimeout: const Duration(seconds: 10),
   )) {
-    // 配置HttpClient以绕过代理
-    (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-      final client = HttpClient();
-      // 禁用代理
-      client.findProxy = (url) => 'DIRECT';
-      return client;
-    };
-    
     // 添加拦截器用于认证和日志记录
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) {
@@ -54,9 +44,10 @@ class ApiService {
 
   // 设置基础URL
   void setBaseUrl(String url) {
-    _baseUrl = url;
+    // 确保URL格式正确：去掉末尾斜杠，因为请求路径都以'/'开头
+    _baseUrl = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
     // 更新Dio的基础URL配置
-    _dio.options.baseUrl = url;
+    _dio.options.baseUrl = _baseUrl;
   }
 
   // 设置API Token
@@ -170,8 +161,10 @@ class ApiService {
       
       if (response.statusCode == 200) {
         final data = response.data['data'];
-        if (data is List) {
-          return data.map((metricJson) => NodeMetric.fromJson(metricJson)).toList();
+        if (data != null && data['metrics'] is List) {
+          return (data['metrics'] as List)
+              .map((metricJson) => NodeMetric.fromJson(metricJson))
+              .toList();
         }
       }
       return [];

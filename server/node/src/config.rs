@@ -143,7 +143,7 @@ impl Default for NodeConfig {
     fn default() -> Self {
         Self {
             core: CoreConfig {
-                url: "ws://localhost:9999/api/v1/ws".to_string(),
+                url: "ws://0.0.0.0:9999/api/v1/ws".to_string(),
                 token: "default-token".to_string(),
                 node_id: None,
             },
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = NodeConfig::default();
-        assert_eq!(config.core.url, "ws://localhost:9999/api/v1/ws");
+        assert_eq!(config.core.url, "ws://0.0.0.0:9999/api/v1/ws");
         assert_eq!(config.core.token, "default-token");
         assert!(config.core.node_id.is_none());
         assert_eq!(config.monitoring.heartbeat_interval, 30);

@@ -63,8 +63,10 @@ async fn main() -> Result<()> {
     
     // 创建路由
     let app = Router::new()
-        // WebSocket路由
+        // WebSocket路由 (节点连接)
         .route("/api/v1/ws", get(websocket_handler))
+        // WebSocket路由 (客户端监控)
+        .route("/ws/client", get(websocket_handler))
         // 健康检查
         .route("/api/v1/health", get(health_check))
         // 节点管理API

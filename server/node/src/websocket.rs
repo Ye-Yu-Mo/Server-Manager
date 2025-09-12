@@ -95,6 +95,9 @@ impl WebSocketClient {
                     "memory_usage": metrics.memory_usage,
                     "memory_total": metrics.memory_total,
                     "memory_available": metrics.memory_available,
+                    "disk_usage": metrics.disk_usage,
+                    "disk_total": metrics.disk_total,
+                    "disk_available": metrics.disk_available,
                     "uptime": metrics.uptime,
                 }
             }),

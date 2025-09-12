@@ -1,5 +1,5 @@
 use serde::Serialize;
-use sysinfo::System;
+use sysinfo::{System, Disks};
 
 /// 系统监控数据
 #[derive(Debug, Serialize, Clone)]
@@ -39,6 +39,7 @@ pub struct DiskInfo {
 /// 监控采集器
 pub struct SystemMonitor {
     sys: System,
+    disks: Disks,
 }
 
 impl SystemMonitor {
@@ -46,14 +47,16 @@ impl SystemMonitor {
     pub fn new() -> Self {
         let mut sys = System::new_all();
         sys.refresh_all();
+        let disks = Disks::new_with_refreshed_list();
         
-        Self { sys }
+        Self { sys, disks }
     }
     
     /// 刷新系统信息
     pub fn refresh(&mut self) {
         self.sys.refresh_cpu_all();
         self.sys.refresh_memory();
+        self.disks.refresh(true);
     }
     
     /// 获取系统信息
@@ -90,7 +93,7 @@ impl SystemMonitor {
             cpu_usage,
             memory_usage,
             memory_total: self.sys.total_memory(),
-            memory_available: self.sys.available_memory(),
+            memory_available: self.calculate_available_memory(),
             disk_usage: disk_usage.map(|(usage, _, _)| usage),
             disk_total: disk_usage.map(|(_, total, _)| total),
             disk_available: disk_usage.map(|(_, _, available)| available),
@@ -119,17 +122,57 @@ impl SystemMonitor {
         (self.sys.used_memory() as f64 / total_memory) * 100.0
     }
     
+    /// 计算可用内存
+    fn calculate_available_memory(&self) -> u64 {
+        let available = self.sys.available_memory();
+        if available > 0 {
+            available
+        } else {
+            // 如果 available_memory() 返回0，则用 total - used 计算
+            let total = self.sys.total_memory();
+            let used = self.sys.used_memory();
+            if total > used {
+                total - used
+            } else {
+                0
+            }
+        }
+    }
+    
     /// 计算磁盘使用率（返回根分区）
     fn calculate_disk_usage(&self) -> Option<(f64, u64, u64)> {
-        // 使用系统信息获取磁盘使用情况
-        // 这里简化处理，实际应该使用更精确的磁盘监控
+        // 获取磁盘信息
+        for disk in &self.disks {
+            let mount_point = disk.mount_point().to_string_lossy();
+            
+            // 查找根分区或主要分区
+            if mount_point == "/" || mount_point == "C:\\" || mount_point.starts_with("/System/Volumes/Data") {
+                let total_space = disk.total_space();
+                let available_space = disk.available_space();
+                
+                if total_space > 0 {
+                    let used_space = total_space - available_space;
+                    let usage_percentage = (used_space as f64 / total_space as f64) * 100.0;
+                    
+                    return Some((usage_percentage, total_space, available_space));
+                }
+            }
+        }
+        
         None
     }
     
     /// 获取所有磁盘信息
     pub fn get_all_disks(&self) -> Vec<DiskInfo> {
-        // 简化版本，返回空向量
-        Vec::new()
+        self.disks.iter().map(|disk| {
+            DiskInfo {
+                name: disk.name().to_string_lossy().to_string(),
+                mount_point: disk.mount_point().to_string_lossy().to_string(),
+                total_space: disk.total_space(),
+                available_space: disk.available_space(),
+                file_system: disk.file_system().to_string_lossy().to_string(),
+            }
+        }).collect()
     }
 }
 

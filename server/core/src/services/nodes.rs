@@ -9,7 +9,7 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 use sqlx::Row;
@@ -318,18 +318,38 @@ pub async fn cleanup_stale_nodes(
 }
 
 
-/// 应用状态（包含连接管理器）
+/// 客户端广播消息类型
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientBroadcastMessage {
+    #[serde(rename = "type")]
+    pub message_type: String,
+    pub id: String,
+    pub timestamp: String,
+    pub data: serde_json::Value,
+}
+
+/// 应用状态（包含连接管理器和客户端广播器）
 #[derive(Clone)]
 pub struct AppState {
     pub database: Arc<Mutex<Database>>,
     pub connection_manager: Arc<ConnectionManager>,
+    pub client_broadcaster: broadcast::Sender<ClientBroadcastMessage>,
 }
 
 impl AppState {
     pub fn new(database: Database) -> Self {
+        let (broadcaster, _) = broadcast::channel(1000); // 支持1000条消息缓冲
         Self {
             database: Arc::new(Mutex::new(database)),
             connection_manager: Arc::new(ConnectionManager::new()),
+            client_broadcaster: broadcaster,
+        }
+    }
+    
+    /// 广播消息给所有客户端
+    pub fn broadcast_to_clients(&self, message: ClientBroadcastMessage) {
+        if let Err(e) = self.client_broadcaster.send(message) {
+            warn!("广播消息失败: {}", e);
         }
     }
 }

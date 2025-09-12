@@ -68,4 +68,28 @@ class Node {
       return '${difference.inDays}天前';
     }
   }
+
+  Node copyWith({
+    int? id,
+    String? nodeId,
+    String? hostname,
+    String? ipAddress,
+    String? osInfo,
+    String? status,
+    DateTime? lastHeartbeat,
+    DateTime? registeredAt,
+    DateTime? updatedAt,
+  }) {
+    return Node(
+      id: id ?? this.id,
+      nodeId: nodeId ?? this.nodeId,
+      hostname: hostname ?? this.hostname,
+      ipAddress: ipAddress ?? this.ipAddress,
+      osInfo: osInfo ?? this.osInfo,
+      status: status ?? this.status,
+      lastHeartbeat: lastHeartbeat ?? this.lastHeartbeat,
+      registeredAt: registeredAt ?? this.registeredAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
 }
