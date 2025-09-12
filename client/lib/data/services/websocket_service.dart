@@ -55,12 +55,8 @@ class WebSocketService {
   String _baseUrl = 'http://47.92.242.94:20001/api/v1';
   String? _apiToken;
   
-  // 重连配置
-  Timer? _reconnectTimer;
+  // 心跳配置
   Timer? _heartbeatTimer;
-  int _reconnectAttempts = 0;
-  static const int _maxReconnectAttempts = 5;
-  static const Duration _reconnectInterval = Duration(seconds: 5);
   static const Duration _heartbeatInterval = Duration(seconds: 30);
   
   // 事件流控制器
@@ -117,7 +113,6 @@ class WebSocketService {
       _setupMessageListener();
       
       _updateState(WebSocketConnectionState.connected);
-      _reconnectAttempts = 0;
       
       // 启动心跳
       _startHeartbeat();
@@ -128,9 +123,6 @@ class WebSocketService {
       print('❌ WebSocket连接失败: $e');
       _updateState(WebSocketConnectionState.error);
       _errorController.add('连接失败: $e');
-      
-      // 自动重连
-      _scheduleReconnect();
     }
   }
 
@@ -175,12 +167,10 @@ class WebSocketService {
         print('❌ WebSocket错误: $error');
         _updateState(WebSocketConnectionState.error);
         _errorController.add('连接错误: $error');
-        _scheduleReconnect();
       },
       onDone: () {
         print('🔌 WebSocket连接关闭');
         _updateState(WebSocketConnectionState.disconnected);
-        _scheduleReconnect();
       },
     );
   }
@@ -329,29 +319,11 @@ class WebSocketService {
     }
   }
 
-  /// 计划重连
-  void _scheduleReconnect() {
-    if (_reconnectAttempts >= _maxReconnectAttempts) {
-      print('❌ 达到最大重连次数，停止重连');
-      _errorController.add('连接失败，已达到最大重试次数');
-      return;
-    }
-    
-    _reconnectTimer?.cancel();
-    _reconnectAttempts++;
-    
-    print('🔄 ${_reconnectInterval.inSeconds}秒后尝试重连 ($_reconnectAttempts/$_maxReconnectAttempts)');
-    
-    _reconnectTimer = Timer(_reconnectInterval, () {
-      connect();
-    });
-  }
 
   /// 断开连接
   Future<void> disconnect() async {
     print('🔌 断开WebSocket连接');
     
-    _reconnectTimer?.cancel();
     _heartbeatTimer?.cancel();
     
     if (_channel != null) {
@@ -360,7 +332,6 @@ class WebSocketService {
     }
     
     _updateState(WebSocketConnectionState.disconnected);
-    _reconnectAttempts = 0;
   }
 
   /// 清理资源
@@ -372,12 +343,7 @@ class WebSocketService {
     _errorController.close();
   }
 
-  /// 重置重连计数
-  void resetReconnectAttempts() {
-    _reconnectAttempts = 0;
-  }
-
-  /// 手动触发重连
+  /// 手动重新连接
   Future<void> reconnect() async {
     await disconnect();
     await connect();

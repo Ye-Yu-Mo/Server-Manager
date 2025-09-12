@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../providers/node_provider.dart';
+import '../widgets/error_widget.dart';
 import '../../data/models/metric.dart';
 
 class MetricsChartPage extends StatefulWidget {
@@ -137,20 +138,13 @@ class _MetricsChartPageState extends State<MetricsChartPage> {
 
     if (_error != null) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              _error!,
-              style: const TextStyle(color: Colors.red),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _loadMetricsData,
-              child: const Text('重试'),
-            ),
-          ],
+        child: SingleChildScrollView(
+          child: EnhancedErrorWidget(
+            error: _error!,
+            onRetry: _loadMetricsData,
+            title: '加载图表数据失败',
+            icon: Icons.bar_chart,
+          ),
         ),
       );
     }

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/node_provider.dart';
 import '../providers/theme_provider.dart';
+import '../widgets/error_widget.dart';
+import '../widgets/setup_prompt_widget.dart';
 import '../../data/models/node.dart';
 import '../../data/models/metric.dart';
 import '../../data/services/websocket_service.dart';
@@ -26,11 +28,58 @@ class _NodeListPageState extends State<NodeListPage> {
 
   Future<void> _loadNodes() async {
     final provider = Provider.of<NodeProvider>(context, listen: false);
-    await provider.loadNodes();
+    // 只有在已配置状态下才尝试加载节点
+    if (provider.appInitState == AppInitState.ready) {
+      await provider.loadNodes();
+    }
   }
 
   Future<void> _refreshData() async {
     await _loadNodes();
+  }
+
+  /// 构建错误显示组件
+  Widget _buildErrorWidget(String error) {
+    // 根据错误类型选择不同的错误组件
+    if (error.contains('网络') || error.contains('连接') || error.contains('timeout')) {
+      return NetworkErrorWidget(
+        error: error,
+        onRetry: _refreshData,
+      );
+    } else if (error.contains('API') || error.contains('HTTP') || error.contains('服务器')) {
+      return ApiErrorWidget(
+        error: error,
+        onRetry: _refreshData,
+        details: _getApiErrorDetails(error),
+      );
+    } else if (error.contains('WebSocket') || error.contains('实时')) {
+      return WebSocketErrorWidget(
+        error: error,
+        onRetry: () async {
+          if (!mounted) return;
+          await _refreshData();
+        },
+      );
+    } else {
+      return EnhancedErrorWidget(
+        error: error,
+        onRetry: _refreshData,
+        title: '加载失败',
+        icon: Icons.warning_amber,
+      );
+    }
+  }
+
+  /// 获取API错误的详细信息
+  String? _getApiErrorDetails(String error) {
+    if (error.contains('DioException')) {
+      return '这通常是由于网络连接问题或服务器不可用导致的。请检查：\n'
+          '1. 网络连接是否正常\n'
+          '2. 服务器地址是否正确\n'
+          '3. 服务器是否正在运行\n'
+          '4. 防火墙是否阻止连接';
+    }
+    return null;
   }
 
   @override
@@ -52,66 +101,131 @@ class _NodeListPageState extends State<NodeListPage> {
               );
             },
           ),
-          // WebSocket连接状态指示器
+          // 只在已配置状态下显示连接状态和刷新按钮
           Consumer<NodeProvider>(
             builder: (context, provider, child) {
-              return IconButton(
-                icon: _buildConnectionIcon(provider.connectionState),
-                onPressed: () => _showConnectionStatus(provider),
-                tooltip: _getConnectionTooltip(provider.connectionState),
+              if (provider.appInitState != AppInitState.ready) {
+                return const SizedBox.shrink();
+              }
+              
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // WebSocket连接状态指示器
+                  IconButton(
+                    icon: _buildConnectionIcon(provider.connectionState),
+                    onPressed: () => _showConnectionStatus(provider),
+                    tooltip: _getConnectionTooltip(provider.connectionState),
+                  ),
+                  // 刷新按钮
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    onPressed: _refreshData,
+                    tooltip: '刷新数据',
+                  ),
+                ],
               );
             },
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _refreshData,
-            tooltip: '刷新数据',
           ),
         ],
       ),
       body: Consumer<NodeProvider>(
         builder: (context, provider, child) {
-          if (provider.isLoading && provider.nodes.isEmpty) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (provider.error != null) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    provider.error!,
-                    style: const TextStyle(color: Colors.red),
-                    textAlign: TextAlign.center,
+          // 根据应用初始化状态显示不同内容
+          switch (provider.appInitState) {
+            case AppInitState.loading:
+              return const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('正在加载配置...'),
+                  ],
+                ),
+              );
+              
+            case AppInitState.needsSetup:
+              return const SingleChildScrollView(
+                child: SetupPromptWidget(),
+              );
+              
+            case AppInitState.error:
+              return Center(
+                child: SingleChildScrollView(
+                  child: _buildErrorWidget(provider.error ?? '未知错误'),
+                ),
+              );
+              
+            case AppInitState.ready:
+              // 已配置，显示节点列表或加载状态
+              if (provider.isLoading && provider.nodes.isEmpty) {
+                return const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text('正在加载节点数据...'),
+                    ],
                   ),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: _refreshData,
-                    child: const Text('重试'),
+                );
+              }
+
+              if (provider.error != null) {
+                return Center(
+                  child: SingleChildScrollView(
+                    child: _buildErrorWidget(provider.error!),
                   ),
-                ],
-              ),
-            );
-          }
+                );
+              }
 
-          if (provider.nodes.isEmpty) {
-            return const Center(
-              child: Text('暂无节点数据'),
-            );
-          }
+              if (provider.nodes.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(
+                        Icons.devices_other,
+                        size: 64,
+                        color: Colors.grey,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        '暂无节点数据',
+                        style: TextStyle(fontSize: 16),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '请确保有Node代理连接到服务器',
+                        style: TextStyle(
+                          color: Colors.grey[600],
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        onPressed: _refreshData,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('刷新'),
+                      ),
+                    ],
+                  ),
+                );
+              }
 
-          return RefreshIndicator(
-            onRefresh: _refreshData,
-            child: ListView.builder(
-              itemCount: provider.nodes.length,
-              itemBuilder: (context, index) {
-                final node = provider.nodes[index];
-                final metric = provider.getMetricForNode(node.nodeId);
-                return _buildNodeCard(node, metric);
-              },
-            ),
-          );
+              return RefreshIndicator(
+                onRefresh: _refreshData,
+                child: ListView.builder(
+                  itemCount: provider.nodes.length,
+                  itemBuilder: (context, index) {
+                    final node = provider.nodes[index];
+                    final metric = provider.getMetricForNode(node.nodeId);
+                    return _buildNodeCard(node, metric);
+                  },
+                ),
+              );
+          }
         },
       ),
     );
@@ -207,6 +321,7 @@ class _NodeListPageState extends State<NodeListPage> {
   Future<void> _refreshNodeMetrics(String nodeId) async {
     final provider = Provider.of<NodeProvider>(context, listen: false);
     await provider.refreshNodeMetrics(nodeId);
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('监控数据已刷新')),
     );
@@ -232,9 +347,10 @@ class _NodeListPageState extends State<NodeListPage> {
     );
 
     if (confirmed == true) {
+      if (!mounted) return;
       final provider = Provider.of<NodeProvider>(context, listen: false);
       final success = await provider.deleteNode(node.nodeId);
-      if (success) {
+      if (success && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('节点 ${node.hostname} 已删除')),
         );
@@ -252,7 +368,6 @@ class _NodeListPageState extends State<NodeListPage> {
       case WebSocketConnectionState.error:
         return const Icon(Icons.cloud_off, color: Colors.red);
       case WebSocketConnectionState.disconnected:
-      default:
         return const Icon(Icons.cloud_off, color: Colors.grey);
     }
   }
@@ -265,10 +380,9 @@ class _NodeListPageState extends State<NodeListPage> {
       case WebSocketConnectionState.connecting:
         return '正在连接...';
       case WebSocketConnectionState.error:
-        return '连接错误';
+        return '连接失败';
       case WebSocketConnectionState.disconnected:
-      default:
-        return '连接已断开';
+        return '未连接';
     }
   }
 
@@ -313,26 +427,15 @@ class _NodeListPageState extends State<NodeListPage> {
               ),
             ],
             const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    provider.reconnectWebSocket();
-                  },
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('重新连接'),
-                ),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    provider.forceRefresh();
-                  },
-                  icon: const Icon(Icons.sync),
-                  label: const Text('强制刷新'),
-                ),
-              ],
+            Center(
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _refreshData();
+                },
+                icon: const Icon(Icons.refresh),
+                label: const Text('刷新数据'),
+              ),
             ),
           ],
         ),

@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'node_list_page.dart';
 import 'settings_page.dart';
-import '../providers/theme_provider.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/node_provider.dart';
+import '../widgets/error_widget.dart';
 import '../../data/models/node.dart';
 import '../../data/models/metric.dart';
 import 'metrics_chart_page.dart';
@@ -89,20 +90,13 @@ class _NodeDetailPageState extends State<NodeDetailPage> {
 
     if (_error != null) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              _error!,
-              style: const TextStyle(color: Colors.red),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _refreshData,
-              child: const Text('重试'),
-            ),
-          ],
+        child: SingleChildScrollView(
+          child: EnhancedErrorWidget(
+            error: _error!,
+            onRetry: _refreshData,
+            title: '加载节点详情失败',
+            icon: Icons.info_outline,
+          ),
         ),
       );
     }
@@ -310,7 +304,7 @@ class _NodeDetailPageState extends State<NodeDetailPage> {
                     icon: const Icon(Icons.delete, size: 18, color: Colors.red),
                     label: const Text('删除节点', style: TextStyle(color: Colors.red)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.withOpacity(0.1),
+                      backgroundColor: Colors.red.withValues(alpha: 0.1),
                     ),
                   ),
               ],
@@ -383,9 +377,10 @@ class _NodeDetailPageState extends State<NodeDetailPage> {
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
+              if (!mounted) return;
               final provider = Provider.of<NodeProvider>(context, listen: false);
               final success = await provider.deleteNode(_node!.nodeId);
-              if (success) {
+              if (success && mounted) {
                 Navigator.pop(context); // 返回上一页
               }
             },

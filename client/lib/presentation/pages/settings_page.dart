@@ -135,9 +135,11 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!mounted) return;
       final provider = Provider.of<NodeProvider>(context, listen: false);
       
-      // 更新Provider中的服务器URL和Token
-      provider.setBaseUrl(serverUrl);
-      provider.setApiToken(_apiTokenController.text.trim());
+      // 更新Provider配置并重新初始化
+      await provider.updateConfiguration(
+        serverUrl,
+        _apiTokenController.text.trim(),
+      );
 
       if (!mounted) return;
       setState(() {
@@ -308,7 +310,7 @@ class _SettingsPageState extends State<SettingsPage> {
       padding: const EdgeInsets.all(12),
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.1),
+        color: Colors.red.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.red),
       ),
@@ -333,7 +335,7 @@ class _SettingsPageState extends State<SettingsPage> {
       padding: const EdgeInsets.all(12),
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.green.withOpacity(0.1),
+        color: Colors.green.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.green),
       ),

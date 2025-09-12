@@ -6,6 +6,14 @@ import '../../data/services/websocket_service.dart';
 import '../../data/models/node.dart';
 import '../../data/models/metric.dart';
 
+/// 应用初始化状态
+enum AppInitState {
+  loading,        // 正在加载设置
+  needsSetup,     // 需要配置设置
+  ready,          // 已配置，可以使用
+  error,          // 配置错误
+}
+
 class NodeProvider with ChangeNotifier {
   final ApiService _apiService;
   late final WebSocketService _webSocketService;
@@ -14,6 +22,11 @@ class NodeProvider with ChangeNotifier {
   bool _isLoading = false;
   String? _error;
   Map<String, NodeMetric> _latestMetrics = {};
+  
+  // 应用初始化状态
+  AppInitState _appInitState = AppInitState.loading;
+  String _serverUrl = '';
+  String _apiToken = '';
   
   // WebSocket相关状态
   WebSocketConnectionState _connectionState = WebSocketConnectionState.disconnected;
@@ -37,6 +50,10 @@ class NodeProvider with ChangeNotifier {
   List<Node> get nodes => _nodes;
   bool get isLoading => _isLoading;
   String? get error => _error;
+  AppInitState get appInitState => _appInitState;
+  String get serverUrl => _serverUrl;
+  String get apiToken => _apiToken;
+  bool get isConfigured => _serverUrl.isNotEmpty;
   WebSocketConnectionState get connectionState => _connectionState;
   bool get isWebSocketConnected => _connectionState == WebSocketConnectionState.connected;
   bool get autoRefreshEnabled => _autoRefreshEnabled;
@@ -169,19 +186,55 @@ class NodeProvider with ChangeNotifier {
   /// 加载设置
   Future<void> _loadSettings() async {
     try {
+      _appInitState = AppInitState.loading;
+      notifyListeners();
+      
       final prefs = await SharedPreferences.getInstance();
       _autoRefreshEnabled = prefs.getBool('auto_refresh') ?? true;
       _refreshInterval = prefs.getInt('refresh_interval') ?? 30;
       
-      // 配置WebSocket服务
-      final serverUrl = prefs.getString('server_url') ?? '';
-      final apiToken = prefs.getString('api_token');
-      _webSocketService.configure(baseUrl: serverUrl, apiToken: apiToken);
+      // 读取服务器配置
+      _serverUrl = prefs.getString('server_url') ?? '';
+      _apiToken = prefs.getString('api_token') ?? '';
       
-      // 根据设置启动自动刷新
-      _updateAutoRefresh();
+      // 检查是否已配置
+      if (_serverUrl.isEmpty) {
+        _appInitState = AppInitState.needsSetup;
+        print('应用需要配置：服务器地址未设置');
+      } else {
+        // 配置API和WebSocket服务
+        _apiService.setBaseUrl(_serverUrl);
+        if (_apiToken.isNotEmpty) {
+          _apiService.setApiToken(_apiToken);
+        }
+        _webSocketService.configure(baseUrl: _serverUrl, apiToken: _apiToken);
+        
+        _appInitState = AppInitState.ready;
+        print('配置加载完成：$_serverUrl');
+        
+        // 尝试加载节点数据
+        await _tryLoadNodes();
+        
+        // 启动自动刷新
+        _updateAutoRefresh();
+      }
+      
+      notifyListeners();
     } catch (e) {
       print('加载设置失败: $e');
+      _appInitState = AppInitState.error;
+      _error = '加载设置失败: $e';
+      notifyListeners();
+    }
+  }
+  
+  /// 尝试加载节点数据
+  Future<void> _tryLoadNodes() async {
+    try {
+      await loadNodes();
+    } catch (e) {
+      // 不在这里设置错误状态，让loadNodes自己处理
+      print('初始加载节点失败: $e');
     }
   }
 
@@ -190,16 +243,14 @@ class NodeProvider with ChangeNotifier {
     _autoRefreshTimer?.cancel();
     
     if (_autoRefreshEnabled) {
-      // 优先使用WebSocket连接
+      // 尝试WebSocket连接
       if (!isWebSocketConnected) {
         _webSocketService.connect();
       }
       
-      // 如果WebSocket连接失败，使用定时器轮询
+      // 使用定时器定期刷新（无论WebSocket是否连接）
       _autoRefreshTimer = Timer.periodic(Duration(seconds: _refreshInterval), (timer) {
-        if (!isWebSocketConnected) {
-          loadNodes(); // 降级到RESTful API
-        }
+        loadNodes(); // 定期刷新数据
       });
     } else {
       _webSocketService.disconnect();
@@ -224,37 +275,51 @@ class NodeProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  /// 更新配置并重新初始化
+  Future<void> updateConfiguration(String serverUrl, String apiToken) async {
+    try {
+      _serverUrl = serverUrl;
+      _apiToken = apiToken;
+      
+      // 保存到SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('server_url', _serverUrl);
+      await prefs.setString('api_token', _apiToken);
+      
+      // 配置服务
+      _apiService.setBaseUrl(_serverUrl);
+      _apiService.setApiToken(_apiToken);
+      _webSocketService.configure(baseUrl: _serverUrl, apiToken: _apiToken);
+      
+      // 更新状态
+      _appInitState = AppInitState.ready;
+      _error = null;
+      
+      notifyListeners();
+      
+      // 尝试连接和加载数据
+      await _tryLoadNodes();
+      _updateAutoRefresh();
+      
+    } catch (e) {
+      _appInitState = AppInitState.error;
+      _error = '更新配置失败: $e';
+      notifyListeners();
+    }
+  }
+
   /// 设置API基础URL同时配置WebSocket
   void setBaseUrl(String url) {
     _apiService.setBaseUrl(url);
     _webSocketService.configure(baseUrl: url);
-    
-    // 如果自动刷新已启用，重新连接WebSocket
-    if (_autoRefreshEnabled) {
-      _webSocketService.reconnect();
-    }
   }
 
   /// 设置API Token同时配置WebSocket
   void setApiToken(String token) {
     _apiService.setApiToken(token);
     _webSocketService.configure(apiToken: token);
-    
-    // 如果自动刷新已启用，重新连接WebSocket
-    if (_autoRefreshEnabled) {
-      _webSocketService.reconnect();
-    }
   }
 
-  /// 手动重新连接WebSocket
-  Future<void> reconnectWebSocket() async {
-    await _webSocketService.reconnect();
-  }
-
-  /// 强制使用RESTful API刷新（用于测试或WebSocket失败时）
-  Future<void> forceRefresh() async {
-    await loadNodes();
-  }
 
   @override
   void dispose() {
