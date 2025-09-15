@@ -84,8 +84,8 @@ async fn main() -> Result<()> {
         .with_state(shared_state);
     
     // 启动WebSocket服务器
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:9999").await?;
-    info!("🌐 WebSocket服务器启动成功，监听端口: 9999");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:20002").await?;
+    info!("🌐 WebSocket服务器启动成功，监听端口: 20002");
     
     // 启动服务器
     axum::serve(listener, app).await?;
