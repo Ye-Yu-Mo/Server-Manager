@@ -4,6 +4,7 @@ import '../providers/node_provider.dart';
 import '../providers/theme_provider.dart';
 import '../widgets/error_widget.dart';
 import '../widgets/setup_prompt_widget.dart';
+import '../widgets/progress_bar_widget.dart';
 import '../../data/models/node.dart';
 import '../../data/models/metric.dart';
 import '../../data/services/websocket_service.dart';
@@ -281,12 +282,35 @@ class _NodeListPageState extends State<NodeListPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        const SizedBox(height: 8),
+        CompactProgressBar(
+          label: 'CPU',
+          percentage: metric.cpuUsagePercent,
+        ),
         const SizedBox(height: 4),
-        Text('CPU: ${metric.formattedCpuUsage}'),
-        Text(metric.formattedMemorySimple),
-        Text(metric.formattedDiskSimple),
-        if (metric.loadAverage != null)
-          Text('负载: ${metric.formattedLoadAverage}'),
+        CompactProgressBar(
+          label: '内存',
+          percentage: metric.memoryUsagePercent,
+        ),
+        const SizedBox(height: 4),
+        CompactProgressBar(
+          label: '磁盘',
+          percentage: metric.diskUsagePercent,
+        ),
+        if (metric.loadAverage != null) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const SizedBox(width: 40),
+              const Icon(Icons.speed, size: 12),
+              const SizedBox(width: 4),
+              Text(
+                '负载: ${metric.formattedLoadAverage}',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }

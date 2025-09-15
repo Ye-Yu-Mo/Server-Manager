@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/node_provider.dart';
 import '../widgets/error_widget.dart';
+import '../widgets/progress_bar_widget.dart';
 import '../../data/models/node.dart';
 import '../../data/models/metric.dart';
 import 'metrics_chart_page.dart';
@@ -187,32 +188,18 @@ class _NodeDetailPageState extends State<NodeDetailPage> {
   }
 
   Widget _buildMetricsCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '监控数据',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            if (_latestMetric != null) ...[
-              _buildMetricRow('CPU使用率', _latestMetric!.formattedCpuUsage),
-              _buildMetricRow('内存详情', _latestMetric!.formattedMemoryUsage),
-              _buildMetricRow('磁盘详情', _latestMetric!.formattedDiskUsage),
-              if (_latestMetric!.loadAverage != null)
-                _buildMetricRow('系统负载', _latestMetric!.formattedLoadAverage),
-              if (_latestMetric!.uptime != null)
-                _buildMetricRow('运行时间', _latestMetric!.formattedUptime),
-              _buildMetricRow('采集时间', _latestMetric!.formattedTime),
-              const SizedBox(height: 8),
-              ElevatedButton(
-                onPressed: _refreshData,
-                child: const Text('刷新监控数据'),
+    if (_latestMetric == null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '监控数据',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
-            ] else ...[
+              const SizedBox(height: 12),
               const Text('暂无监控数据'),
               const SizedBox(height: 8),
               ElevatedButton(
@@ -220,9 +207,48 @@ class _NodeDetailPageState extends State<NodeDetailPage> {
                 child: const Text('获取监控数据'),
               ),
             ],
-          ],
+          ),
         ),
-      ),
+      );
+    }
+
+    return Column(
+      children: [
+        SystemMetricsCard(
+          cpuUsage: _latestMetric!.cpuUsagePercent,
+          memoryUsage: _latestMetric!.memoryUsagePercent,
+          diskUsage: _latestMetric!.diskUsagePercent,
+          memoryDetail: _latestMetric!.formattedMemoryUsage,
+          diskDetail: _latestMetric!.formattedDiskUsage,
+          loadAverage: _latestMetric!.formattedLoadAverage,
+          uptime: _latestMetric!.formattedUptime,
+        ),
+        const SizedBox(height: 16),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '数据信息',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                _buildMetricRow('采集时间', _latestMetric!.formattedTime),
+                const SizedBox(height: 12),
+                Center(
+                  child: ElevatedButton.icon(
+                    onPressed: _refreshData,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('刷新监控数据'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 

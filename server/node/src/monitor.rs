@@ -115,11 +115,16 @@ impl SystemMonitor {
     /// 计算内存使用率
     fn calculate_memory_usage(&self) -> f64 {
         let total_memory = self.sys.total_memory() as f64;
+        let available_memory = self.sys.available_memory() as f64;
+        
         if total_memory == 0.0 {
             return 0.0;
         }
         
-        (self.sys.used_memory() as f64 / total_memory) * 100.0
+        // 使用 (total - available) / total 来计算使用率
+        // 这比直接使用 used_memory 更准确，特别是在 macOS 上
+        let used_memory = total_memory - available_memory;
+        (used_memory / total_memory) * 100.0
     }
     
     /// 计算可用内存
